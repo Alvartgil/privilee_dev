@@ -47,7 +47,7 @@ WITH
   END
     AS event_timestamp
   FROM
-    ${ref("privilee-12177.mongodb_production.register")}
+    ${ref("register")}
   WHERE
     deleted_at IS NULL
     -- Exclude soft deleted records
