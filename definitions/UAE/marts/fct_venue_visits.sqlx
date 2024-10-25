@@ -47,7 +47,7 @@ pre_operations {
     DECLARE start_date_process DATE DEFAULT (
     ${when(incremental(),
     `SELECT CURRENT_DATE()-1`,
-    `SELECT TIMESTAMP('2015-01-01')`)}
+    `SELECT DATE('2015-01-01')`)}
   );
 }
 
