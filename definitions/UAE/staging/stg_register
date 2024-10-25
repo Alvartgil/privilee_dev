@@ -1,0 +1,67 @@
+-- definitions/UAE/staging/stg_register.sqlx
+config {
+  type: "view",
+  schema: "dev_silver",
+  description: "Standardized register event data with UAE timezone adjustments and basic cleaning",
+  columns: {
+    event_id: "Unique identifier for the register event record",
+    event_timestamp: "Timestamp of the register event normalized to timezone +4. For checkouts after 20:00, sets to 23:59:59 (UAE: UTC + 4H)",
+    user_id: "ID of the user who performed the register event",
+    venue_id: "ID of the venue where the register event occurred",
+    event_name: "Type of register event: 'enter' for checkins, 'leave' for checkouts",
+    event_type: "Classification of register event: 'manual', 'auto', 'location', etc.",
+    event_triggered_by: "'user' (member action), 'venue' (staff action), 'system' (automatic)",
+    nb_kids: "Number of kids declared at registration event",
+    guests: "Array containing guest information including IDs and types",
+    created_at: "Original creation timestamp in UTC",
+    modified_at: "Last modification timestamp in UTC"
+  },
+  tags: ["UAE", "staging"]
+}
+
+WITH stg_register AS (
+  -- First select and rename basic fields
+  SELECT
+    _id as event_id,
+    user_id,
+    venue_id,
+    event_name,
+    event_type,
+    event_triggered_by,
+    nb_kids,
+    guests,
+    created_at,
+    modified_at,
+    -- Timestamp normalization according to business rules
+    CASE
+      -- For checkins (enter), add 4 hours (UAE) to created_at (UTC Time)
+      WHEN event_name = 'enter' 
+        THEN DATETIME(DATETIME_ADD(TIMESTAMP(created_at), INTERVAL 4 HOUR))
+      
+      -- For manual checkouts (leave), add 4 hours (UAE) to modified_at (UTC Time)
+      WHEN event_name = 'leave' 
+        AND event_type <> 'auto' 
+        THEN DATETIME(DATETIME_ADD(TIMESTAMP(modified_at), INTERVAL 4 HOUR))
+      
+      -- For automatic checkouts after 20:00, set to 23:59:59 of the next day
+      WHEN event_type = 'auto' 
+        AND CAST(FORMAT_TIMESTAMP('%H:%M:%S', TIMESTAMP(created_at)) AS TIME) > TIME '19:59:59' 
+        THEN DATETIME(TIMESTAMP(CONCAT(
+          CAST(DATE_ADD(DATE(created_at), INTERVAL 1 DAY) AS STRING), 
+          ' 23:59:59'
+        )))
+      
+      -- For other cases, set to 23:59:59 of the same day
+      ELSE DATETIME((CONCAT(
+        CAST(DATE(created_at) AS STRING), 
+        ' 23:59:59'
+      )))
+    END as event_timestamp
+
+  FROM ${ref("mongodb_production.register")}
+  WHERE deleted_at IS NULL  -- Exclude soft deleted records
+)
+
+SELECT
+  *
+FROM stg_register
