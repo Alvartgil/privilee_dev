@@ -38,6 +38,7 @@ visits_in_window AS (
     -- Self-join to get all visits within 2-month window for each date
     SELECT 
         a.date AS reference_date,
+        a.day_of_week AS reference_day_of_week,  -- Add reference day
         b.date AS visit_date,
         b.day_of_week,
         b.user_id,
@@ -48,8 +49,9 @@ visits_in_window AS (
     FROM daily_visits a
     INNER JOIN daily_visits b
         ON b.date <= a.date  -- Only include visits up to reference date
-        AND b.date > a.window_start  -- Only include visits within 2 months
+        AND b.date >= a.window_start  -- Include visits from window start (inclusive)
         AND a.venue_id = b.venue_id  -- Same venue
+        AND a.day_of_week = b.day_of_week  -- Same day of week as reference date
 ),
 
 rolling_averages AS (
@@ -59,7 +61,7 @@ rolling_averages AS (
         venue_id,
         venue_name,
         venue_type,
-        day_of_week,
+        reference_day_of_week AS day_of_week,
         ROUND(AVG(visit_duration_minutes)) AS avg_visit_duration_minutes,
         COUNT(*) AS total_visits,
         MIN(visit_date) AS first_date_in_window,
@@ -71,7 +73,7 @@ rolling_averages AS (
         venue_id,
         venue_name,
         venue_type,
-        day_of_week
+        reference_day_of_week
 )
 
 -- Final output with additional metrics
@@ -84,7 +86,7 @@ SELECT
     avg_visit_duration_minutes,
     total_visits,
     first_date_in_window,
-    last_date_in_window,
+    last_date_in_window
 FROM rolling_averages
 WHERE 
     avg_visit_duration_minutes IS NOT NULL
