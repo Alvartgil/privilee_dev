@@ -35,7 +35,7 @@ SELECT * FROM (
         user_id,
         venue_id,
         event_timestamp,
-        created_at
+        created_at,
         RANK() OVER (
             PARTITION BY CAST(event_timestamp AS date), venue_id, user_id 
             ORDER BY event_timestamp ASC
