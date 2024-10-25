@@ -1,0 +1,124 @@
+-- definitions/UAE/marts/fct_venue_visits.sqlx
+config {
+    type: "table",
+    schema: "dev_gold_uae",
+    description: "Fact table for venue visits with adjusted checkout times based on historical averages",
+    columns: {
+        date: "Date of the visit",
+        visit_id: "Unique identifier for the visit",
+        venue_id: "ID of the venue",
+        venue_name: "Name of the venue",
+        venue_type: "Type of venue",
+        user_id: "ID of the user who visited",
+        user_type: "Type of user (member, guest, etc.)",
+        nb_people: "Total number of people in the visit (adults + kids)",
+        nb_adults: "Number of adults in the visit",
+        nb_kids: "Number of kids in the visit",
+        max_nb_people: "Maximum number of people during all visits for the same day and user",
+        max_nb_adults: "Maximum number of adults during visit during all visits for the same day and user",
+        max_nb_kids: "Maximum number of kids during visit during all visits for the same day and user",
+        checkin_timestamp: "Timestamp when the user checked in (UAE timezone)",
+        checkout_timestamp: "Adjusted timestamp when the user checked out (UAE timezone). For auto checkouts, uses historical average if available",
+        checkout_timestamp_raw: "Original checkout timestamp without adjustments",
+        checkin_type: "Type of check-in (manual, auto, location)",
+        checkin_triggered_by: "Source that triggered the check-in (user, venue, system)",
+        checkout_type: "Type of check-out (manual, auto)",
+        checkout_triggered_by: "Source that triggered the check-out (user, venue, system)",
+        unique_factor: "1 if first visit of day for this user at this venue, 0 otherwise",
+        is_weekend: "Flag indicating if the visit occurred on a weekend",
+        year_month: "Year and month of the visit (e.g., 'January 2024')",
+        visit_duration: "Duration of the visit in HH:MM:SS format",
+        visit_duration_minutes: "Duration of the visit in minutes based on adjusted checkout",
+        visit_duration_minutes_raw: "Original duration of the visit in minutes without adjustments",
+        avg_historical_duration_minutes: "Average historical visit duration in minutes for this venue on this day of week",
+        gym_class_visit_id: "ID of the gym class if the visit was for a class",
+        is_gym_class: "Flag indicating if the visit was for a gym class",
+        buffer_time: "Buffer Time used to Adjust Auto checkouts"
+    },
+    tags: ["UAE", "marts"],
+    bigquery: {
+       partitionBy: "date",
+       clusterBy: ["venue_id"]
+    }
+}
+
+
+WITH fct_venue_visits AS (
+    SELECT *
+    FROM ${ref("fct_venue_visits_view")}
+    WHERE ${when(incremental(), 
+   "date = CURRENT_DATE()-1",
+   "1=1"
+    )}
+)
+
+SELECT 
+   v.date,
+   v.visit_id,
+   v.venue_id,
+   v.venue_name,
+   v.venue_type,
+   v.user_id,
+   v.user_type,
+   v.nb_people,
+   v.nb_adults,
+   v.nb_kids,
+   v.max_nb_people,
+   v.max_nb_adults,
+   v.max_nb_kids,
+   v.checkin_timestamp,
+   -- Adjust checkout time only for auto checkouts with available average
+   CASE 
+       WHEN v.checkout_type = 'auto' AND s.avg_visit_duration_minutes IS NOT NULL
+       THEN TIMESTAMP_ADD(
+           v.checkin_timestamp, 
+           INTERVAL CAST(s.avg_visit_duration_minutes AS INT64) MINUTE
+       )
+       ELSE v.checkout_timestamp
+   END as checkout_timestamp,
+   v.checkout_timestamp as checkout_timestamp_raw,
+   v.checkin_type,
+   v.checkin_triggered_by,
+   v.checkout_type,
+   v.checkout_triggered_by,
+   v.unique_factor,
+   v.is_weekend,
+   v.year_month,
+   FORMAT_TIMESTAMP("%H:%M:%S", 
+       TIMESTAMP_ADD(
+           TIMESTAMP "1970-01-01 00:00:00 UTC",
+           INTERVAL TIMESTAMP_DIFF(
+               CASE 
+                   WHEN v.checkout_type = 'auto' AND s.avg_visit_duration_minutes IS NOT NULL
+                   THEN TIMESTAMP_ADD(
+                       v.checkin_timestamp, 
+                       INTERVAL CAST(s.avg_visit_duration_minutes AS INT64) MINUTE
+                   )
+                   ELSE v.checkout_timestamp
+               END,
+               v.checkin_timestamp, 
+               SECOND
+           ) SECOND
+       )
+   ) as visit_duration,
+   TIMESTAMP_DIFF(
+       CASE 
+           WHEN v.checkout_type = 'auto' AND s.avg_visit_duration_minutes IS NOT NULL
+           THEN TIMESTAMP_ADD(
+               v.checkin_timestamp, 
+               INTERVAL CAST(s.avg_visit_duration_minutes AS INT64) MINUTE
+           )
+           ELSE v.checkout_timestamp
+       END,
+       v.checkin_timestamp, 
+       MINUTE
+   ) as visit_duration_minutes,
+   v.visit_duration_minutes as visit_duration_minutes_raw,
+   s.avg_visit_duration_minutes as avg_historical_duration_minutes,
+   v.gym_class_visit_id,
+   v.is_gym_class,
+   0 as buffer_time
+FROM fct_venue_visits v
+LEFT JOIN ${ref("int_venue_visits_daily_duration_avg")} s
+   ON v.date = s.date
+   AND v.venue_id = s.venue_id

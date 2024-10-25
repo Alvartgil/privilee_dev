@@ -1,0 +1,149 @@
+-- definitions/UAE/intermediate/int_venue_visits.sqlx
+config {
+    type: "view",
+    schema: "dev_silver_uae",
+    description: "Intermediate model for venue visits combining check-ins, check-outs and guest information",
+    columns: {
+        date: "Date of the visit",
+        visit_id: "Unique identifier for the visit (from check-in event)",
+        venue_id: "ID of the venue",
+        venue_name: "Name of the venue",
+        venue_type: "Type of venue",
+        user_id: "ID of the user who performed the check-in",
+        user_type: "Type of the user who checked in",
+        nb_people: "Total number of people in the visit",
+        nb_adults: "Number of adults in the visit",
+        nb_kids: "Number of kids in the visit",
+        max_nb_people: "Maximum number of people during all visits for the same day and user",
+        max_nb_adults: "Maximum number of adults during visit during all visits for the same day and user",
+        max_nb_kids: "Maximum number of kids during visit during all visits for the same day and user",
+        checkin_timestamp: "Timestamp of check-in (UAE timezone)",
+        checkout_timestamp: "Timestamp of check-out (UAE timezone)",
+        is_duplicate: "Flag indicating if this is a duplicate visit (glitch)",
+        checkin_type: "Type of check-in: manual or scan",
+        checkin_triggered_by: "Source that triggered the check-in: venue",
+        checkout_type: "Type of check-out: manual, location or auto",
+        checkout_triggered_by: "Source that triggered the check-out: user, venue or system"
+    },
+    tags: ["UAE", "intermediate", "visits"]
+}
+
+
+WITH checkins_desnormalized AS (
+    -- Desnormalize checkins with guest information
+    SELECT DISTINCT
+        CAST(event_timestamp AS date) date,
+        event_id AS visit_id,
+        user_id,                                   
+        nb_kids,
+        guest_info.value._id AS guest_user_id,      
+        guest_info.value.user_type AS guest_type,   
+        COALESCE(
+            MAX(CASE 
+                WHEN guest_info.value._id = user_id THEN guest_info.value.type 
+                ELSE NULL 
+            END) OVER (PARTITION BY event_id), 
+            guest_info.value.type
+        ) AS user_type,                            
+        event_timestamp AS checkin_timestamp,
+        event_type AS checkin_type,
+        event_triggered_by AS checkin_triggered_by,
+        venue_id,
+        DENSE_RANK() OVER (
+            PARTITION BY CAST(event_timestamp AS date), user_id, venue_id 
+            ORDER BY event_timestamp ASC
+        ) AS r
+    FROM ${ref("stg_register")},
+    UNNEST(guests) AS guest_info
+    WHERE event_name = 'enter'
+),
+
+checkins AS (
+    -- Aggregate guest counts and checkin information
+    SELECT DISTINCT
+        date,
+        visit_id,
+        user_id,                                    
+        COUNTIF(guest_type = 'user' AND user_id = guest_user_id) 
+            OVER (PARTITION BY visit_id) AS nb_adults,
+        CASE
+            WHEN nb_kids > COUNTIF(guest_type = 'child') OVER (PARTITION BY visit_id) THEN nb_kids
+            ELSE COUNTIF(guest_type = 'child') OVER (PARTITION BY visit_id)
+        END AS nb_kids,
+        user_type,                                  
+        checkin_timestamp,
+        checkin_type,
+        checkin_triggered_by,
+        venue_id,
+        r
+    FROM checkins_desnormalized
+),
+
+checkouts AS (
+    -- Process checkout information
+    SELECT
+        CAST(event_timestamp AS date) date,
+        event_id,
+        user_id,                                    
+        event_timestamp AS checkout_timestamp,
+        event_type AS checkout_type,
+        event_triggered_by AS checkout_triggered_by,
+        venue_id,
+        ROW_NUMBER() OVER (
+            PARTITION BY CAST(event_timestamp AS date), user_id, venue_id 
+            ORDER BY event_timestamp ASC
+        ) AS r
+    FROM ${ref("stg_register")}
+    WHERE event_name = 'leave'
+)
+
+-- Combine all information for final visits
+SELECT DISTINCT
+    a.date,
+    a.visit_id,
+    a.venue_id,
+    v.venue_name,
+    v.venue_type,
+    a.user_id,                                      
+    a.user_type,                                    
+    a.nb_adults + a.nb_kids AS nb_people,
+    a.nb_adults,
+    a.nb_kids,
+    MAX(a.nb_adults + a.nb_kids) OVER (
+        PARTITION BY a.date, a.venue_id, a.user_id 
+        ORDER BY a.checkin_timestamp ASC
+    ) AS max_nb_people,
+    MAX(a.nb_adults) OVER (
+        PARTITION BY a.date, a.venue_id, a.user_id 
+        ORDER BY a.checkin_timestamp ASC
+    ) AS max_nb_adults,
+    MAX(a.nb_kids) OVER (
+        PARTITION BY a.date, a.venue_id, a.user_id 
+        ORDER BY a.checkin_timestamp ASC
+    ) AS max_nb_kids,
+    a.checkin_timestamp,
+    IFNULL(
+        b.checkout_timestamp, 
+        DATETIME(CONCAT(CAST(DATE(a.checkin_timestamp) AS STRING), ' 23:59:59'))
+    ) AS checkout_timestamp,
+    IF(
+        LEAD(b.checkout_timestamp) OVER (
+            PARTITION BY a.date, a.venue_id, a.user_id 
+            ORDER BY a.checkin_timestamp DESC
+        ) > a.checkin_timestamp, 
+        true, 
+        false
+    ) AS is_duplicate,
+    a.checkin_type,
+    a.checkin_triggered_by,
+    IFNULL(b.checkout_type, 'auto') AS checkout_type,
+    IFNULL(b.checkout_triggered_by, 'system') AS checkout_triggered_by
+FROM checkins a
+LEFT JOIN checkouts b
+    ON a.date = b.date
+    AND a.venue_id = b.venue_id
+    AND a.user_id = b.user_id                       
+    AND a.checkin_timestamp <= b.checkout_timestamp
+    AND a.r = b.r
+INNER JOIN ${ref("stg_venue")} v
+    ON a.venue_id = v.venue_id

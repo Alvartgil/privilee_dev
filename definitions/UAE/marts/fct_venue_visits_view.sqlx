@@ -1,0 +1,80 @@
+-- definitions/UAE/marts/fct_venue_visits_view.sqlx
+config {
+   type: "view",
+   schema: "dev_gold_uae",
+   description: "Fact table for venue visits including gym classes information",
+   columns: {
+       date: "Date of the visit",
+       visit_id: "Unique identifier for the visit",
+       venue_id: "ID of the venue",
+       venue_name: "Name of the venue",
+       venue_type: "Type of venue",
+       user_id: "ID of the user who visited",
+       user_type: "Type of user who visited",
+       nb_people: "Total number of people in the visit",
+       nb_adults: "Number of adults in the visit",
+       nb_kids: "Number of kids in the visit",
+       max_nb_people: "Maximum number of people during all visits for the same day and user",
+       max_nb_adults: "Maximum number of adults during all visits for the same day and user",
+       max_nb_kids: "Maximum number of kids during all visits for the same day and user",
+       checkin_timestamp: "Timestamp of check-in (UAE timezone)",
+       checkout_timestamp: "Timestamp of check-out (UAE timezone)",
+       visit_duration: "Duration of visit in HH:MM:SS format",
+       visit_duration_minutes: "Duration of visit in minutes",
+       is_weekend: "Flag indicating if visit was on weekend",
+       year_month: "Year and month of visit (e.g., 'January 2024')",
+       r: "Visit number for user in venue on this date",
+       unique_factor: "1 if first visit of day, 0 otherwise",
+       gym_class_visit_id: "ID of gym class if visit was for a class",
+       is_gym_class: "Flag indicating if visit was for a gym class",
+       checkin_type: "Type of check-in: manual or scan",
+       checkin_triggered_by: "Source that triggered the check-in: venue",
+       checkout_type: "Type of check-out: manual, location or auto",
+       checkout_triggered_by: "Source that triggered the check-out: user, venue or system"
+   },
+   tags: ["UAE", "marts"]
+}
+
+WITH visits_no_duplicates AS (
+   -- Filter out duplicate visits and add ranking
+   SELECT 
+       *,
+       DENSE_RANK() OVER (
+           PARTITION BY date, user_id, venue_id 
+           ORDER BY checkin_timestamp ASC
+       ) as r,
+       CASE 
+           WHEN DENSE_RANK() OVER (
+               PARTITION BY date, user_id, venue_id 
+               ORDER BY checkin_timestamp ASC
+           ) = 1 THEN 1 
+           ELSE 0 
+       END as unique_factor
+   FROM ${ref("int_venue_visits")}
+   WHERE is_duplicate = false
+)
+
+-- Final fact table combining visits and gym classes
+SELECT 
+   a.* except(is_duplicate),
+   CASE 
+       WHEN EXTRACT(DAYOFWEEK from a.date) IN (1, 7) THEN TRUE 
+       ELSE FALSE 
+   END as is_weekend,
+   FORMAT_DATE('%B %Y', a.date) as year_month,
+   FORMAT_TIMESTAMP(
+       "%H:%M:%S",
+       TIMESTAMP_ADD(
+           TIMESTAMP "1970-01-01 00:00:00 UTC",
+           INTERVAL TIMESTAMP_DIFF(checkout_timestamp, checkin_timestamp, SECOND) SECOND
+       )
+   ) as visit_duration,
+   TIMESTAMP_DIFF(checkout_timestamp, checkin_timestamp, MINUTE) as visit_duration_minutes,
+   b.gym_class_visit_id,
+   IF(b.gym_class_visit_id is null, false, true) as is_gym_class
+FROM visits_no_duplicates a
+LEFT JOIN ${ref("stg_register_gym_class")} b
+   ON a.date = b.date
+   AND a.user_id = b.user_id
+   AND a.venue_id = b.venue_id
+   AND a.r = b.r
