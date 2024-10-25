@@ -1,7 +1,7 @@
 -- definitions/UAE/intermediate/int_venue_visits.sqlx
 config {
     type: "view",
-    schema: "dev_silver",
+    schema: "dev_silver_uae",
     description: "Intermediate model for venue visits combining check-ins, check-outs and guest information",
     columns: {
         date: "Date of the visit",

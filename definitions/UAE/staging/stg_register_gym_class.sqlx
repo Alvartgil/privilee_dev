@@ -1,0 +1,44 @@
+-- definitions/UAE/staging/stg_register_gym_class.sqlx
+config {
+    type: "view",
+    schema: "dev_silver_uae",
+    description: "Standardized gym class registration data with UAE timezone adjustments",
+    columns: {
+        date: "Date of the gym class registration",
+        gym_class_visit_id: "Unique identifier for the gym class visit",
+        user_id: "ID of the user who registered for the class",
+        venue_id: "ID of the venue where the class takes place",
+        event_timestamp: "Timestamp of the registration adjusted to UAE timezone (UTC+4)",
+        created_at: "Original creation timestamp in UTC",
+        r: "Row number for ordering multiple registrations in the same day"
+    },
+    tags: ["UAE", "staging"]
+}
+
+SELECT * FROM (
+    WITH register_gym_class_normalized AS (
+        -- Normalize timestamps to UAE timezone
+        SELECT
+            _id as gym_class_visit_id,
+            user_id,
+            venue_id,
+            DATETIME(DATETIME_ADD(TIMESTAMP(created_at), INTERVAL 4 HOUR)) as event_timestamp,
+            created_at
+        FROM ${ref("register_gym_class")}
+        WHERE deleted_at IS NULL
+    )
+
+    -- Add date and registration order
+    SELECT
+        CAST(event_timestamp AS date) AS date,
+        gym_class_visit_id,
+        user_id,
+        venue_id,
+        event_timestamp,
+        created_at
+        RANK() OVER (
+            PARTITION BY CAST(event_timestamp AS date), venue_id, user_id 
+            ORDER BY event_timestamp ASC
+        ) AS r
+    FROM register_gym_class_normalized
+)

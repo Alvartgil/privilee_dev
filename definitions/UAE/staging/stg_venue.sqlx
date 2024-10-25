@@ -1,7 +1,7 @@
 -- definitions/UAE/staging/stg_venue.sqlx
 config {
    type: "view",
-   schema: "dev_silver",
+   schema: "dev_silver_uae",
    description: "Standardized venue data with cleaned fields and type casting",
    columns: {
        venue_id: "Unique identifier for the venue",
