@@ -46,10 +46,9 @@ config {
 WITH fct_venue_visits AS (
     SELECT *
     FROM ${ref("fct_venue_visits_view")}
-    WHERE ${when(incremental(), 
-   "date = CURRENT_DATE()-1",
-   "1=1"
-    )}
+    ${when(incremental(),
+   `WHERE date = CURRENT_DATE()-1`,
+   `WHERE 1=1`)}
 )
 
 SELECT 
