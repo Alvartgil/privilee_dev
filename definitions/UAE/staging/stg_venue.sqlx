@@ -1,0 +1,44 @@
+-- definitions/UAE/staging/stg_venue.sqlx
+config {
+   type: "view",
+   schema: "dev_silver",
+   description: "Standardized venue data with cleaned fields and type casting",
+   columns: {
+       venue_id: "Unique identifier for the venue",
+       parent_venue_id: "ID of the parent venue if exists",
+       venue_group_ids: "Array of venue group IDs this venue belongs to",
+       venue_name: "Full name of the venue",
+       venue_short_name: "Short/display name of the venue",
+       venue_type: "Type of venue ('studio' for is_studio=true, otherwise original type)",
+       venue_tiers: "Array of tiers this venue belongs to",
+       venue_access: "Access type ('revolving' or 'non-revolving')",
+       venue_emirate: "Emirate where the venue is located",
+       created_at: "Original creation timestamp in UTC",
+       modified_at: "Last modification timestamp in UTC"
+   },
+   tags: ["UAE", "staging", "venues"]
+}
+
+SELECT * FROM (
+   SELECT
+       _id as venue_id,
+       parent_venue_id,
+       venue_group_ids,
+       name as venue_name,
+       short_name as venue_short_name,
+       CASE 
+           WHEN is_studio = true THEN 'studio'
+           ELSE type
+       END as venue_type,
+       tiers as venue_tiers,
+       CASE
+           WHEN revolving = true THEN 'revolving'
+           ELSE 'non-revolving'
+       END as venue_access,
+       emirate as venue_emirate,
+       created_at,
+       modified_at
+   FROM ${ref("venue")}
+   WHERE deleted_at IS NULL  -- Exclude soft deleted records
+       AND lower(name) NOT LIKE '%privilee%'  -- Exclude Privilee venues
+)
