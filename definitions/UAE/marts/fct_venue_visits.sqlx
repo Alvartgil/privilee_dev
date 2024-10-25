@@ -1,6 +1,6 @@
 -- definitions/UAE/marts/fct_venue_visits.sqlx
 config {
-    type: "table",
+    type: "incremental",
     schema: "dev_gold_uae",
     description: "Fact table for venue visits with adjusted checkout times based on historical averages",
     columns: {
