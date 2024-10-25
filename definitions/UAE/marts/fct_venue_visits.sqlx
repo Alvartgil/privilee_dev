@@ -55,7 +55,8 @@ pre_operations {
 WITH fct_venue_visits AS (
     SELECT *
     FROM ${ref("fct_venue_visits_view")}
-    WHERE date = start_date_process
+    WHERE date >= start_date_process
+    and date < CURRENT_DATE()
     
 )
 
