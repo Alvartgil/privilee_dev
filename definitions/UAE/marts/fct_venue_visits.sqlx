@@ -1,0 +1,77 @@
+-- definitions/UAE/marts/fct_venue_visits.sqlx
+config {
+    type: "table",
+    schema: "dev_gold_uae",
+    description: "Fact table for venue visits with adjusted checkout times based on historical averages",
+    columns: {
+        date: "Date of the visit",
+        visit_id: "Unique identifier for the visit",
+        venue_id: "ID of the venue",
+        venue_name: "Name of the venue",
+        venue_type: "Type of venue",
+        is_studio: "Flag indicating if venue is a studio",
+        user_id: "ID of the user who visited",
+        user_type: "Type of the user",
+        nb_people: "Total number of people in the visit",
+        nb_adults: "Number of adults in the visit",
+        nb_kids: "Number of kids in the visit",
+        max_nb_people: "Maximum number of people during visit",
+        max_nb_adults: "Maximum number of adults during visit",
+        max_nb_kids: "Maximum number of kids during visit",
+        checkin_timestamp: "Timestamp of check-in (UAE timezone)",
+        checkout_timestamp: "Adjusted checkout timestamp based on averages for auto checkouts",
+        checkout_timestamp_raw: "Original checkout timestamp without adjustments",
+        visit_duration_minutes: "Duration of visit in minutes based on adjusted checkout",
+        visit_duration_minutes_raw: "Original duration of visit in minutes",
+        is_weekend: "Flag indicating if visit was on weekend",
+        year_month: "Year and month of visit",
+        r: "Visit number for user in venue on this date",
+        unique_factor: "1 if first visit of day, 0 otherwise",
+        gym_class_visit_id: "ID of gym class if visit was for a class",
+        is_gym_class: "Flag indicating if visit was for a gym class",
+        checkin_type: "Type of check-in",
+        checkin_triggered_by: "Source that triggered the check-in",
+        checkout_type: "Type of check-out",
+        checkout_triggered_by: "Source that triggered the check-out"
+    },
+    tags: ["UAE", "marts"],
+    bigquery: {
+       partitionBy: "date",
+       clusterBy: ["venue_id"]
+    }
+}
+
+SELECT 
+    -- Original fields
+    v.* EXCEPT(checkout_timestamp, visit_duration_minutes),
+    -- Store original checkout
+    v.checkout_timestamp as checkout_timestamp_raw,
+    v.visit_duration_minutes as visit_duration_minutes_raw,
+    -- Adjust checkout time only for auto checkouts with available average
+    CASE 
+        WHEN v.checkout_type = 'auto' AND s.avg_visit_duration_minutes IS NOT NULL
+        THEN DATETIME_ADD(
+            v.checkin_timestamp, 
+            INTERVAL s.avg_visit_duration_minutes MINUTE
+        )
+        ELSE v.checkout_timestamp
+    END as checkout_timestamp,
+    -- Calculate new duration based on adjusted checkout
+    TIMESTAMP_DIFF(
+        CASE 
+            WHEN v.checkout_type = 'auto' AND s.avg_visit_duration_minutes IS NOT NULL
+            THEN DATETIME_ADD(
+                v.checkin_timestamp, 
+                INTERVAL s.avg_visit_duration_minutes MINUTE
+            )
+            ELSE v.checkout_timestamp
+        END,
+        v.checkin_timestamp, 
+        MINUTE
+    ) as visit_duration_minutes,
+    -- Include average duration used for adjustment
+    s.avg_visit_duration_minutes as avg_historical_duration_minutes
+FROM ${ref("fct_venue_visits_view")} v
+LEFT JOIN ${ref("int_venue_visits_daily_duration_avg")} s
+    ON v.date = s.date
+    AND v.venue_id = s.venue_id

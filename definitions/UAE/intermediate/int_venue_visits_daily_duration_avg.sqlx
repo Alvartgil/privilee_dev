@@ -1,0 +1,90 @@
+-- definitions/UAE/intermediate/int_venue_visits_duration_avg.sqlx
+config {
+    type: "view",
+    schema: "dev_silver_uae",
+    description: "Rolling 2-month average venue visit duration by day of week",
+    columns: {
+        date: "Reference date",
+        venue_id: "ID of the venue",
+        venue_name: "Name of the venue",
+        venue_type: "Type of venue",
+        day_of_week: "Day of the week (Monday, Tuesday, etc.)",
+        avg_visit_duration_minutes: "Average visit duration in minutes for previous 2 months",
+        total_visits: "Total visits in the 2-month window",
+        first_date_in_window: "Start date of the 2-month window",
+        last_date_in_window: "End date of the 2-month window (reference date)"
+    },
+    tags: ["UAE", "intermediate"]
+}
+
+WITH daily_visits AS (
+    -- Daily visit durations per user and venue
+    SELECT 
+        date,
+        FORMAT_DATE('%A', date) AS day_of_week,
+        user_id,
+        venue_id,
+        venue_name,
+        venue_type,
+        visit_duration_minutes,
+        DATE_SUB(date, INTERVAL 2 MONTH) AS window_start
+    FROM ${ref("fct_venue_visits_view")}
+    WHERE 
+        checkout_type <> 'auto'  -- Exclude automatic checkouts
+        AND visit_duration_minutes > 0  -- Ensure valid durations
+),
+
+visits_in_window AS (
+    -- Self-join to get all visits within 2-month window for each date
+    SELECT 
+        a.date AS reference_date,
+        b.date AS visit_date,
+        b.day_of_week,
+        b.user_id,
+        b.venue_id,
+        b.venue_name,
+        b.venue_type,
+        b.visit_duration_minutes
+    FROM daily_visits a
+    INNER JOIN daily_visits b
+        ON b.date <= a.date  -- Only include visits up to reference date
+        AND b.date > a.window_start  -- Only include visits within 2 months
+        AND a.venue_id = b.venue_id  -- Same venue
+),
+
+rolling_averages AS (
+    -- Calculate averages for each 2-month window
+    SELECT 
+        reference_date AS date,
+        venue_id,
+        venue_name,
+        venue_type,
+        day_of_week,
+        ROUND(AVG(visit_duration_minutes)) AS avg_visit_duration_minutes,
+        COUNT(*) AS total_visits,
+        MIN(visit_date) AS first_date_in_window,
+        MAX(visit_date) AS last_date_in_window,
+        COUNT(DISTINCT visit_date) AS days_with_visits
+    FROM visits_in_window
+    GROUP BY 
+        reference_date,
+        venue_id,
+        venue_name,
+        venue_type,
+        day_of_week
+)
+
+-- Final output with additional metrics
+SELECT
+    date,
+    venue_id,
+    venue_name,
+    venue_type,
+    day_of_week,
+    avg_visit_duration_minutes,
+    total_visits,
+    first_date_in_window,
+    last_date_in_window,
+FROM rolling_averages
+WHERE 
+    avg_visit_duration_minutes IS NOT NULL
