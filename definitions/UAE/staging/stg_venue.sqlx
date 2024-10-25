@@ -16,7 +16,7 @@ config {
        created_at: "Original creation timestamp in UTC",
        modified_at: "Last modification timestamp in UTC"
    },
-   tags: ["UAE", "staging", "venues"]
+   tags: ["UAE", "staging"]
 }
 
 SELECT * FROM (
