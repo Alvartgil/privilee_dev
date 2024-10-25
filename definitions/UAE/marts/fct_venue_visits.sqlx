@@ -40,17 +40,23 @@ config {
        partitionBy: "date",
        clusterBy: ["venue_id"]
     },
-    uniqueKey: ["visit_id"]
+    uniqueKey: ["visit_id"],
+}
+
+pre_operations {
+    DECLARE start_date_process DATE DEFAULT (
+    ${when(incremental(),
+    `SELECT CURRENT_DATE()-1`,
+    `SELECT TIMESTAMP('2015-01-01')`)}
+  );
 }
 
 
 WITH fct_venue_visits AS (
     SELECT *
     FROM ${ref("fct_venue_visits_view")}
-    WHERE ${when(incremental(), 
-        "date = CURRENT_DATE()-1",
-        "1=1"
-    )}
+    WHERE date = start_date_process
+    
 )
 
 SELECT 
