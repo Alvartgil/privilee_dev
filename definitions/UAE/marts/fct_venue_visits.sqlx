@@ -39,14 +39,18 @@ config {
     bigquery: {
        partitionBy: "date",
        clusterBy: ["venue_id"]
-    }
+    },
+    uniqueKey: ["visit_id"]
 }
 
 
 WITH fct_venue_visits AS (
     SELECT *
     FROM ${ref("fct_venue_visits_view")}
-    ${when(incremental(), `date = CURRENT_DATE()-1`)}
+    WHERE ${when(incremental(), 
+        "date = CURRENT_DATE()-1",
+        "1=1"
+    )}
 )
 
 SELECT 
